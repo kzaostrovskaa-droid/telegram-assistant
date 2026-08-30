@@ -1,5 +1,6 @@
 import asyncio
 import os
+import base64
 from datetime import datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F
@@ -12,11 +13,10 @@ from database import init_db, add_task, get_tasks, add_reminder
 from file_handler import summarize_text, extract_tasks
 from voice_handler import transcribe_voice
 from reminders import start_scheduler
+from calendar_service import add_event
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-
-# ===== КОМАНДЫ =====
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
@@ -26,6 +26,7 @@ async def cmd_start(message: Message):
         "/task <текст> — добавить задачу\n"
         "/tasks — список задач\n"
         "/remind <минуты> <текст> — напоминание\n"
+        "/calendar <название> | <дата время> — в Google Calendar\n"
         "📎 Пришли файл .txt — сделаю выжимку и задачи\n"
         "🎙 Пришли голосовое — распознаю текст"
     )
@@ -69,7 +70,20 @@ async def cmd_remind(message: Message):
     add_reminder(message.from_user.id, remind_text, remind_at)
     await message.answer(f"⏰ Напомню через {minutes} мин: {remind_text}")
 
-# ===== ФАЙЛЫ =====
+@dp.message(Command("calendar"))
+async def cmd_calendar(message: Message):
+    text = message.text.replace("/calendar", "").strip()
+    if "|" not in text:
+        await message.answer("❌ Формат: /calendar Название | 2024-09-01 15:00")
+        return
+    title, dt_str = [x.strip() for x in text.split("|", 1)]
+    try:
+        start = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+        end = start + timedelta(hours=1)
+        link = add_event(title, "", start.isoformat(), end.isoformat())
+        await message.answer(f"📅 Добавлено в календарь:\n{link}")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
 
 @dp.message(F.document)
 async def handle_document(message: Message):
@@ -108,8 +122,6 @@ async def handle_document(message: Message):
     
     os.remove(file_path)
 
-# ===== ГОЛОСОВЫЕ =====
-
 @dp.message(F.voice)
 async def handle_voice(message: Message):
     await message.answer("🎙 Распознаю голосовое...")
@@ -122,8 +134,6 @@ async def handle_voice(message: Message):
     
     add_task(message.from_user.id, text, description="Из голосового сообщения")
     await message.answer("✅ Добавлено в задачи")
-
-# ===== ВЕБ-СЕРВЕР (для Render.com) =====
 
 async def health(request):
     return web.Response(text="Bot is running!")
@@ -138,13 +148,9 @@ async def start_web_server():
     await site.start()
     print(f"🌐 Web server started on port {port}")
 
-# ===== ЗАПУСК =====
-
 async def main():
     init_db()
     start_scheduler(bot)
-    
-    # Запускаем веб-сервер и бота параллельно
     await asyncio.gather(
         start_web_server(),
         dp.start_polling(bot)
